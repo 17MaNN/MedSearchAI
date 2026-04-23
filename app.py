@@ -6,24 +6,18 @@ import numpy as np
 
 app = Flask(__name__)
 
-# 🔑 Init once (important)
-client = Endee(token="")
+client = Endee(token="fnqrjpe7:LbHSmuETDzepyMfkNaFCZb3yM7YWJBfp:as1")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 INDEX_NAME = "medical"
 
-# 📂 Load index
 index = client.get_index(INDEX_NAME)
 
-
-# 🧠 Cosine similarity (optional scoring)
 def cosine_similarity(a, b):
     a = np.array(a)
     b = np.array(b)
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-
-# 🌐 Serve frontend
 @app.route("/")
 def home():
     return send_file("index.html")
@@ -37,16 +31,13 @@ def ask():
     if not query:
         return jsonify({"error": "Query is required"}), 400
 
-    # 🔍 Embed query
     query_vector = model.encode(query).tolist()
 
-    # 🔎 Search in Endee
     results = index.query(
         vector=query_vector,
         top_k=5
     )
 
-    # 🧠 Extract context
     retrieved_texts = []
 
     if isinstance(results, list):
@@ -62,7 +53,6 @@ def ask():
 
     context = " ".join(retrieved_texts[:3])
 
-    # 🤖 Prompt
     prompt = f"""
 You are a medical assistant.
 
@@ -80,7 +70,6 @@ Question:
 Answer:
 """
 
-    # 🤖 Call Ollama
     response = ollama.chat(
         model="phi",
         messages=[{"role": "user", "content": prompt}]
@@ -94,7 +83,5 @@ Answer:
         "context_used": retrieved_texts[:3]
     })
 
-
-# 🚀 Run server
 if __name__ == "__main__":
     app.run(debug=True)

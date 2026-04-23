@@ -2,23 +2,20 @@ from endee import Endee, Precision
 from sentence_transformers import SentenceTransformer
 import ollama
 import numpy as np
-import fitz  # PyMuPDF
+import fitz 
 
-# 🔑 Your API token
 client = Endee(token="fnqrjpe7:LbHSmuETDzepyMfkNaFCZb3yM7YWJBfp:as1")
 
-# 🧠 Load embedding model
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 INDEX_NAME = "medical"
 DIMENSION = 384
 
-# 🧹 Reset index
 try:
     client.delete_index(INDEX_NAME)
-    print("🗑️ Old index deleted")
+    print(" Old index deleted")
 except:
-    print("ℹ️ No previous index")
+    print(" No previous index")
 
 client.create_index(
     name=INDEX_NAME,
@@ -26,11 +23,10 @@ client.create_index(
     space_type="cosine",
     precision=Precision.INT8
 )
-print("✅ Fresh index created")
+print(" Fresh index created")
 
 index = client.get_index(INDEX_NAME)
 
-# 📄 Extract text from PDF
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -38,7 +34,6 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
-# ✂️ Chunk text
 def chunk_text(text, chunk_size=100):
     words = text.split()
     chunks = []
@@ -46,14 +41,12 @@ def chunk_text(text, chunk_size=100):
         chunks.append(" ".join(words[i:i+chunk_size]))
     return chunks
 
-# 📂 Load PDF
 pdf_path = "medical.pdf"
 raw_text = extract_text_from_pdf(pdf_path)
 docs = chunk_text(raw_text)
 
-print(f"📄 Chunks created: {len(docs)}")
+print(f" Chunks created: {len(docs)}")
 
-# 🔁 Insert data
 vectors = []
 stored_vectors = []
 
@@ -68,13 +61,11 @@ for i, text in enumerate(docs):
 
     stored_vectors.append((text, vector))
 
-# Batch insert
 for i in range(0, len(vectors), 50):
     index.upsert(vectors[i:i+50])
 
-print("✅ PDF data inserted")
+print(" PDF data inserted")
 
-# 🔍 Query
 query = "What is diabetes?"
 query_vector = model.encode(query).tolist()
 
@@ -83,13 +74,12 @@ results = index.query(
     top_k=3
 )
 
-# 🧠 Cosine similarity
 def cosine_similarity(a, b):
     a = np.array(a)
     b = np.array(b)
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-print("\n🔎 Retrieved Results:\n")
+print("\n Retrieved Results:\n")
 
 retrieved_texts = []
 
@@ -97,27 +87,25 @@ for text, vec in stored_vectors:
     score = cosine_similarity(query_vector, vec)
     retrieved_texts.append((text, score))
 
-# Sort by score
 retrieved_texts = sorted(retrieved_texts, key=lambda x: x[1], reverse=True)
 
 top_texts = [t[0] for t in retrieved_texts[:3]]
 
 for t, s in retrieved_texts[:3]:
-    print(f"📄 {t}\n⭐ Score: {round(s,4)}\n")
+    print(f" {t}\n Score: {round(s,4)}\n")
 
-# 🧠 Context
-context = " ".join(top_texts)
+context = " ".join([t[0] for t in retrieved_texts[:2]])
 
-print("🧠 Context:\n", context)
+print("Context:\n", context)
 
-# 🤖 LLM
 prompt = f"""
-You are a medical assistant.
+You are a professional medical assistant.
 
-STRICT RULES:
+Rules:
 - Use ONLY the given context
-- Do NOT add extra knowledge
-- If not found → say "I don't know"
+- Do NOT add external knowledge
+- If answer is not present, say "I don't know"
+- Answer clearly in 2-4 lines
 
 Context:
 {context}
@@ -129,9 +117,9 @@ Answer:
 """
 
 response = ollama.chat(
-    model="phi",
+    model="llama3",
     messages=[{"role": "user", "content": prompt}]
 )
 
-print("\n🤖 Final Answer:\n")
+print("\n Final Answer:\n")
 print(response["message"]["content"])
