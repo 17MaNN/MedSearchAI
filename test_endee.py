@@ -1,6 +1,7 @@
 from endee import Endee, Precision
 from sentence_transformers import SentenceTransformer
 import ollama
+import numpy as np
 
 # 🔑 Your API token
 client = Endee(token="fnqrjpe7:LbHSmuETDzepyMfkNaFCZb3yM7YWJBfp:as1")
@@ -11,37 +12,46 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 INDEX_NAME = "medical"
 DIMENSION = 384
 
-# ✅ Create index safely
+# 🧹 DELETE old index (fix duplicate data issue)
 try:
-    client.create_index(
-        name=INDEX_NAME,
-        dimension=DIMENSION,
-        space_type="cosine",
-        precision=Precision.INT8
-    )
-    print("✅ Index created")
-except Exception as e:
-    print("⚠️ Index may already exist:", e)
+    client.delete_index(INDEX_NAME)
+    print("🗑️ Old index deleted")
+except:
+    print("ℹ️ No previous index found")
+
+# ✅ Create fresh index
+client.create_index(
+    name=INDEX_NAME,
+    dimension=DIMENSION,
+    space_type="cosine",
+    precision=Precision.INT8
+)
+print("✅ Fresh index created")
 
 # 📂 Get index
 index = client.get_index(INDEX_NAME)
 
-# 📄 Sample data (replace with real dataset later)
+# 📄 Sample data
 docs = [
     "Diabetes is a chronic disease that affects blood sugar levels.",
     "Hypertension is high blood pressure and can lead to heart disease.",
     "Asthma affects the airways and makes breathing difficult."
 ]
 
-# 🔁 Insert data
+# 🔁 Insert data + store vectors locally for scoring
 vectors = []
+stored_vectors = []
+
 for i, text in enumerate(docs):
     vector = model.encode(text).tolist()
+
     vectors.append({
         "id": str(i),
         "vector": vector,
         "meta": {"text": text}
     })
+
+    stored_vectors.append((text, vector))
 
 index.upsert(vectors)
 print("✅ Data inserted")
@@ -55,31 +65,29 @@ results = index.query(
     top_k=2
 )
 
-print("\n🔎 Retrieved Results:\n")
+print("\n🔎 Retrieved Results with Scores:\n")
 
-# ✅ Handle BOTH response types
+# 🧠 Cosine similarity function
+def cosine_similarity(a, b):
+    a = np.array(a)
+    b = np.array(b)
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Print results + compute scores manually
 retrieved_texts = []
 
-if isinstance(results, list):
-    for match in results:
-        text = match.get("meta", {}).get("text", "No text")
-        score = match.get("score", "N/A")
-        retrieved_texts.append(text)
-        print(f"📄 {text}\n⭐ Score: {score}\n")
-else:
-    for match in results.matches:
-        text = getattr(match, "meta", {}).get("text", "No text")
-        score = getattr(match, "score", "N/A")
-        retrieved_texts.append(text)
-        print(f"📄 {text}\n⭐ Score: {score}\n")
+for text, vec in stored_vectors:
+    score = cosine_similarity(query_vector, vec)
+    retrieved_texts.append(text)
+    print(f"📄 {text}\n⭐ Score: {round(score, 4)}\n")
 
-# 🧠 Build context
-context = " ".join(retrieved_texts)
+# 🧠 Build context (top relevant texts only)
+context = " ".join(retrieved_texts[:2])
 
 print("🧠 Context for LLM:\n")
 print(context)
 
-# 🤖 Generate answer using Ollama (phi model)
+# 🤖 Strict prompt (no hallucination)
 prompt = f"""
 You are a medical assistant.
 
@@ -98,6 +106,7 @@ Question:
 Answer:
 """
 
+# 🤖 Generate answer using Ollama
 response = ollama.chat(
     model="phi",
     messages=[
