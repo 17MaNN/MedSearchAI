@@ -1,7 +1,8 @@
 import os
+import numpy as np
 from flask import Flask, request, jsonify, send_file
 from endee import Endee
-from sentence_transformers import SentenceTransformer
+from huggingface_hub import InferenceClient
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -23,15 +24,35 @@ if not GROQ_API_KEY:
         "and set it as an environment variable."
     )
 
+HF_TOKEN = os.environ.get("HF_TOKEN")
+if not HF_TOKEN:
+    raise RuntimeError(
+        "HF_TOKEN is not set. Get a free token (read access is enough) at "
+        "https://huggingface.co/settings/tokens and set it as an environment variable."
+    )
+
 client = Endee(token=ENDEE_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 
 COLLECTION_NAME = "medical"
 VECTOR_FIELD = "embedding"  # must match the field name used in test_endee.py
 GROQ_MODEL = "llama-3.1-8b-instant"  # fast + generous free tier
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # same model used to ingest
 
 collection = client.get_collection(COLLECTION_NAME)
+
+
+def embed(text: str) -> list:
+    """Get a single 384-dim sentence embedding via HF's hosted Inference API
+    instead of loading sentence-transformers/torch locally (too heavy for
+    Render's 512MB free tier)."""
+    result = hf_client.feature_extraction(text, model=EMBEDDING_MODEL)
+    arr = np.array(result)
+    if arr.ndim == 2:
+        # Some models return per-token embeddings -> mean-pool to one vector
+        arr = arr.mean(axis=0)
+    return arr.tolist()
 
 
 @app.route("/")
@@ -47,7 +68,7 @@ def ask():
     if not query:
         return jsonify({"error": "Query is required"}), 400
 
-    query_vector = model.encode(query).tolist()
+    query_vector = embed(query)
 
     results = collection.search(
         fields={VECTOR_FIELD: {"query": query_vector, "limit": 3}}
