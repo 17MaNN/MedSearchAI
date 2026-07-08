@@ -1,31 +1,48 @@
-from endee import Endee, Precision
+import os
+from endee import Endee
 from sentence_transformers import SentenceTransformer
-import ollama
-import numpy as np
-import fitz 
+import fitz
+from dotenv import load_dotenv
 
-client = Endee(token="fnqrjpe7:LbHSmuETDzepyMfkNaFCZb3yM7YWJBfp:as1")
+load_dotenv()
+
+ENDEE_TOKEN = os.environ.get("ENDEE_TOKEN")
+if not ENDEE_TOKEN:
+    raise RuntimeError(
+        "ENDEE_TOKEN is not set. Create a .env file (see .env.example) "
+        "with ENDEE_TOKEN=your_token_here"
+    )
+
+client = Endee(token=ENDEE_TOKEN)
+
+COLLECTION_NAME = "medical"
+DIMENSION = 384
+VECTOR_FIELD = "embedding"  # name of the dense-vector field in this collection
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-INDEX_NAME = "medical"
-DIMENSION = 384
-
+# --- Create (or reuse) the collection ---
 try:
-    client.delete_index(INDEX_NAME)
-    print(" Old index deleted")
-except:
-    print(" No previous index")
+    collection = client.get_collection(COLLECTION_NAME)
+    print(f"Using existing collection '{COLLECTION_NAME}'")
+except Exception:
+    client.create_collection(
+        name=COLLECTION_NAME,
+        fields=[
+            {
+                "name": VECTOR_FIELD,
+                "type": "vector",
+                "params": {
+                    "dimension": DIMENSION,
+                    "space_type": "cosine",
+                    "precision": "int8",
+                },
+            }
+        ],
+    )
+    collection = client.get_collection(COLLECTION_NAME)
+    print(f"Created new collection '{COLLECTION_NAME}'")
 
-client.create_index(
-    name=INDEX_NAME,
-    dimension=DIMENSION,
-    space_type="cosine",
-    precision=Precision.INT8
-)
-print(" Fresh index created")
-
-index = client.get_index(INDEX_NAME)
 
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
@@ -34,68 +51,50 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
+
 def chunk_text(text, chunk_size=100):
     words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size):
-        chunks.append(" ".join(words[i:i+chunk_size]))
-    return chunks
+    return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+
 
 pdf_path = "medical.pdf"
 raw_text = extract_text_from_pdf(pdf_path)
 docs = chunk_text(raw_text)
+print(f"Chunks created: {len(docs)}")
 
-print(f" Chunks created: {len(docs)}")
-
-vectors = []
-stored_vectors = []
-
+# --- Upsert in batches ---
+objects = []
 for i, text in enumerate(docs):
     vector = model.encode(text).tolist()
-
-    vectors.append({
+    objects.append({
         "id": str(i),
-        "vector": vector,
-        "meta": {"text": text}
+        "meta": {"text": text},
+        "fields": {VECTOR_FIELD: vector},
     })
 
-    stored_vectors.append((text, vector))
+BATCH_SIZE = 50
+for i in range(0, len(objects), BATCH_SIZE):
+    collection.upsert(objects[i:i + BATCH_SIZE])
 
-for i in range(0, len(vectors), 50):
-    index.upsert(vectors[i:i+50])
+print("PDF data inserted")
 
-print(" PDF data inserted")
-
+# --- Query ---
 query = "What is diabetes?"
 query_vector = model.encode(query).tolist()
 
-results = index.query(
-    vector=query_vector,
-    top_k=3
+results = collection.search(
+    fields={VECTOR_FIELD: {"query": query_vector, "limit": 3}}
 )
 
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+hits = results["results"][VECTOR_FIELD]
 
-print("\n Retrieved Results:\n")
+print("\nRetrieved Results:\n")
+for hit in hits:
+    text = hit.get("meta", {}).get("text", "")
+    score = hit.get("similarity")
+    print(f"{text}\nScore: {score}\n")
 
-retrieved_texts = []
-
-for text, vec in stored_vectors:
-    score = cosine_similarity(query_vector, vec)
-    retrieved_texts.append((text, score))
-
-retrieved_texts = sorted(retrieved_texts, key=lambda x: x[1], reverse=True)
-
-top_texts = [t[0] for t in retrieved_texts[:3]]
-
-for t, s in retrieved_texts[:3]:
-    print(f" {t}\n Score: {round(s,4)}\n")
-
-context = " ".join([t[0] for t in retrieved_texts[:2]])
-
+context = " ".join(hit.get("meta", {}).get("text", "") for hit in hits[:2])
 print("Context:\n", context)
 
 prompt = f"""
@@ -116,10 +115,12 @@ Question:
 Answer:
 """
 
+import ollama
+
 response = ollama.chat(
     model="llama3",
     messages=[{"role": "user", "content": prompt}]
 )
 
-print("\n Final Answer:\n")
+print("\nFinal Answer:\n")
 print(response["message"]["content"])

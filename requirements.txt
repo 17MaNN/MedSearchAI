@@ -1,0 +1,6 @@
+flask
+gunicorn
+endee
+sentence-transformers
+groq
+python-dotenv
