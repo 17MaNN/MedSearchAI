@@ -1,6 +1,7 @@
 flask
 gunicorn
 endee
-sentence-transformers
+huggingface_hub
 groq
 python-dotenv
+numpy
